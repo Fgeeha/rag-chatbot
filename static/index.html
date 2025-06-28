@@ -1,60 +1,123 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Internal RAG Chat</title>
-  <script>
-    async function sendMessage() {
-      const input = document.getElementById('msg');
-      const session = localStorage.getItem('session_id') || crypto.randomUUID();
-      localStorage.setItem('session_id', session);
-
-      const resp = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: input.value, session_id: session })
-      });
-      const data = await resp.json();
-      appendMessage('user', input.value);
-      appendMessage('bot', data.answer);
-      input.value = '';
-    }
-    function appendMessage(role, text) {
-      const log = document.getElementById('log');
-      const div = document.createElement('div');
-      div.className = role;
-      div.textContent = text;
-      log.appendChild(div);
-      log.scrollTop = log.scrollHeight;
-    }
-    window.onload = async () => {
-      // подгружаем историю, если есть
-      const session = localStorage.getItem('session_id');
-      if (session) {
-        const res = await fetch(`/history/${session}`);
-        if (res.ok) {
-          const hist = await res.json();
-          hist.forEach(m => appendMessage(m.role, m.content));
-        }
-      }
-    };
-  </script>
+  <title>RAG‑Chatbot</title>
   <style>
-    body { font-family: sans-serif; max-width: 700px; margin: auto; }
-    #log { border: 1px solid #ccc; padding: 10px; height: 60vh; overflow-y: auto; }
-    .user { text-align: right; font-weight: bold; margin: 5px 0; }
-    .bot { text-align: left; margin: 5px 0; }
-    #controls { display: flex; gap: 8px; margin-top: 10px; }
-    #msg { flex: 1; }
+    :root{--bg:#fff;--fg:#1f1f1f;--bot:#f2f2f2;--user:#d7ebff;--side:#fafafa;--side-fg:#444}
+    @media(prefers-color-scheme:dark){:root{--bg:#1e1e1e;--fg:#e8e8e8;--bot:#2e2e2e;--user:#244e72;--side:#272727;--side-fg:#ccc}}
+    *{box-sizing:border-box;font-family:system-ui,sans-serif}
+    body{margin:0;background:var(--bg);color:var(--fg);display:flex;height:100vh;overflow:hidden}
+    aside{width:270px;background:var(--side);border-right:1px solid #888;display:flex;flex-direction:column}
+    #side-head{display:flex;align-items:center;justify-content:space-between;padding:1rem}
+    #side-head h2{margin:0;font-size:1rem;color:var(--side-fg)}
+    #new{background:#0064d6;color:#fff;border:none;border-radius:4px;width:28px;height:28px;cursor:pointer;font-size:20px;line-height:24px;padding:0}
+    #sessions{flex:1;overflow:auto;padding:.5rem;display:flex;flex-direction:column;gap:.25rem}
+    .s-item{padding:.45rem .6rem;border-radius:.4rem;cursor:pointer;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;font-size:.9rem;color:var(--side-fg)}
+    .s-item.active{background:#c7d7ff;font-weight:600}
+    .s-item:hover{background:rgba(0,0,0,.08)}
+    /* chat area */
+    #chat-wrap{flex:1;display:flex;flex-direction:column}
+    header{padding:1rem;text-align:center;font-weight:700}
+    #log{flex:1;overflow:auto;padding:1rem;display:flex;flex-direction:column;gap:.5rem}
+    .msg{padding:.6rem .8rem;border-radius:.8rem;max-width:75%;white-space:pre-wrap;line-height:1.35}
+    .user{align-self:flex-end;background:var(--user)}
+    .bot{align-self:flex-start;background:var(--bot)}
+    footer{display:flex;gap:.5rem;padding:.5rem;border-top:1px solid #ccc}
+    textarea{flex:1;resize:none;padding:.6rem;border-radius:.5rem;border:1px solid #aaa;min-height:2.8rem}
+    button{padding:.6rem 1.2rem;border:none;border-radius:.5rem;background:#0064d6;color:#fff;cursor:pointer}
+    button:disabled{opacity:.4;cursor:default}
+    #loading{display:none;margin-left:.5rem}
+    .fade{animation:fade-in .3s ease}
+    @keyframes fade-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
   </style>
 </head>
 <body>
-  <h1>Internal RAG Chat</h1>
-  <div id="log"></div>
-  <div id="controls">
-    <input id="msg" type="text" placeholder="Ваш вопрос…" onkeydown="event.key==='Enter'&&sendMessage()" />
-    <button onclick="sendMessage()">Send</button>
+  <aside>
+    <div id="side-head"><h2>Чаты</h2><button id="new">＋</button></div>
+    <div id="sessions"></div>
+  </aside>
+  <div id="chat-wrap">
+    <header>RAG‑Chatbot</header>
+    <main id="log"></main>
+    <footer>
+      <textarea id="msg" placeholder="Введите вопрос…"></textarea>
+      <button id="send">⇢</button>
+      <span id="loading">⏳</span>
+    </footer>
   </div>
+
+<script>
+const log = document.getElementById('log');
+const msgBox = document.getElementById('msg');
+const sendBtn = document.getElementById('send');
+const loader = document.getElementById('loading');
+const sessionsEl = document.getElementById('sessions');
+const newBtn = document.getElementById('new');
+
+// ── session helpers ────────────────────────────────────────────────────────
+function loadSessions(){
+  return JSON.parse(localStorage.getItem('sessions')||'[]');
+}
+function saveSessions(arr){
+  localStorage.setItem('sessions',JSON.stringify(arr));
+}
+let sessions = loadSessions();
+let current = localStorage.getItem('session_id') || null;
+
+function setActive(id){ current=id; localStorage.setItem('session_id',id); renderSessions(); loadHistory(); }
+
+function addSession(id,title="Новый чат"){
+  sessions.unshift({id,title}); saveSessions(sessions); setActive(id);
+}
+
+// ── UI render ──────────────────────────────────────────────────────────────
+function renderSessions(){
+  sessionsEl.innerHTML='';
+  sessions.forEach(({id,title})=>{
+    const d=document.createElement('div');d.className='s-item'+(id===current?' active':'');
+    d.textContent=title; d.onclick=()=>setActive(id); sessionsEl.appendChild(d);
+  })
+}
+
+function append(role,text){
+  const div=document.createElement('div');div.className=`msg ${role} fade`;div.textContent=text;log.appendChild(div);log.scrollTop=log.scrollHeight;
+}
+function clearChat(){log.innerHTML='';}
+
+async function loadHistory(){
+  clearChat();
+  if(!current) return;
+  try{const r=await fetch(`/history/${current}`);if(r.ok){const hist=await r.json();hist.forEach(m=>append(m.role,m.content));}}
+  catch{append('bot','⚠️ Не удалось загрузить историю');}
+}
+
+// ── send message ───────────────────────────────────────────────────────────
+async function send(){
+  const q=msgBox.value.trim();if(!q) return;append('user',q);msgBox.value='';toggle(false);
+  try{
+    const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,session_id:current})});
+    const data=await r.json();append('bot',data.answer||('Ошибка: '+data.detail));
+    // обновляем title сессии первой строчкой вопроса (если ещё "Новый чат")
+    const idx=sessions.findIndex(s=>s.id===current);
+    if(idx>-1 && sessions[idx].title==='Новый чат'){sessions[idx].title=q.substring(0,40);saveSessions(sessions);renderSessions();}
+  }catch(e){append('bot','⚠️ '+e);} finally{toggle(true);} }
+
+function toggle(en){sendBtn.disabled=!en;loader.style.display=en?'none':'inline-block';}
+
+sendBtn.onclick=send;
+msgBox.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
+newBtn.onclick=()=>{addSession(crypto.randomUUID());clearChat();};
+
+// ── init ───────────────────────────────────────────────────────────────────
+// если список сессий пуст, но localStorage.session_id уже есть (старый формат)
+if(sessions.length===0 && localStorage.getItem('session_id')){
+  sessions=[{id:localStorage.getItem('session_id'),title:'Старый чат'}];
+  saveSessions(sessions);
+}
+if(!current){addSession(crypto.randomUUID());}
+renderSessions();loadHistory();
+</script>
 </body>
 </html>
