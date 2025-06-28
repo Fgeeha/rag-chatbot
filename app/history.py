@@ -1,4 +1,5 @@
 from datetime import datetime
+
 from sqlmodel import SQLModel, Field, create_engine, Session, select
 
 engine = create_engine("sqlite:///data/chat.db", echo=False)

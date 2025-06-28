@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ollama
+
 from app.embeddings_qdrant import embed_text, load_vector_store
 from app.history import log_message
 
